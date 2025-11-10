@@ -18,14 +18,6 @@ import csv
 class Fish:
     """Individual fish agent with Couzin model behavior and SIRS startle response"""
 
-    position: npt.NDArray[np.float64]
-    velocity: npt.NDArray[np.float64]
-    id: int
-    state: str  # 'susceptible', 'infected', 'recovered'
-    state_timer: int
-    infected_duration: int
-    recovered_duration: int
-
     def __init__(self, position: npt.ArrayLike, velocity: npt.ArrayLike, fish_id: int,
                  infected_duration: int = 10, recovered_duration: int = 20) -> None:
         self.position = np.array(position, dtype=float)
@@ -61,23 +53,6 @@ class Fish:
 
 class FishSchool:
     """Simulation of fish school using Couzin model"""
-
-    n_fish: int
-    space_size: float
-    zone_repulsion: float
-    zone_orientation: float
-    zone_attraction: float
-    max_speed: float
-    min_speed: float
-    max_turn_rate: float
-    predator_position: Optional[npt.NDArray[np.float64]]
-    predator_detection_radius: float
-    startle_transmission_prob: float
-    visual_range: float
-    total_startles: int
-    cascade_startles: int
-    fish: List[Fish]
-    time_step: int
 
     def __init__(self, n_fish: int = 50, space_size: float = 100,
                  beta: float = 0.6, gamma: int = 10, delta: int = 20) -> None:
@@ -427,10 +402,10 @@ def visualize_simulation(n_fish: int = 50, n_steps: int = 1000, predator_time: i
     ax = fig.add_subplot(111, projection='3d')
 
     # Initialize scatter plots for three states
-    susceptible_fish = ax.scatter([], [], [], c='blue', marker='o', s=30, alpha=0.6, label='Susceptible')
-    infected_fish = ax.scatter([], [], [], c='red', marker='o', s=50, alpha=0.8, label='Infected')
-    recovered_fish = ax.scatter([], [], [], c='green', marker='o', s=40, alpha=0.7, label='Recovered')
-    predator_plot = ax.scatter([], [], [], c='black', marker='x', s=200, label='Predator')
+    susceptible_fish = ax.scatter([], [], [], c='blue', marker='o', s=30, alpha=0.6, label='Susceptible')  # type: ignore
+    infected_fish = ax.scatter([], [], [], c='red', marker='o', s=50, alpha=0.8, label='Infected')  # type: ignore
+    recovered_fish = ax.scatter([], [], [], c='green', marker='o', s=40, alpha=0.7, label='Recovered')  # type: ignore
+    predator_plot = ax.scatter([], [], [], c='black', marker='x', s=200, label='Predator')  # type: ignore
 
     # Detection radius sphere (will be shown when predator is active)
     detection_sphere = None
@@ -482,32 +457,32 @@ def visualize_simulation(n_fish: int = 50, n_steps: int = 1000, predator_time: i
         # Update plots for each state
         if susceptible_positions:
             susceptible_positions = np.array(susceptible_positions)
-            susceptible_fish._offsets3d = (susceptible_positions[:, 0],
+            susceptible_fish._offsets3d = (susceptible_positions[:, 0],  # type: ignore
                                           susceptible_positions[:, 1],
                                           susceptible_positions[:, 2])
         else:
-            susceptible_fish._offsets3d = ([], [], [])
+            susceptible_fish._offsets3d = ([], [], [])  # type: ignore
 
         if infected_positions:
             infected_positions = np.array(infected_positions)
-            infected_fish._offsets3d = (infected_positions[:, 0],
+            infected_fish._offsets3d = (infected_positions[:, 0],  # type: ignore
                                         infected_positions[:, 1],
                                         infected_positions[:, 2])
         else:
-            infected_fish._offsets3d = ([], [], [])
+            infected_fish._offsets3d = ([], [], [])  # type: ignore
 
         if recovered_positions:
             recovered_positions = np.array(recovered_positions)
-            recovered_fish._offsets3d = (recovered_positions[:, 0],
+            recovered_fish._offsets3d = (recovered_positions[:, 0],  # type: ignore
                                         recovered_positions[:, 1],
                                         recovered_positions[:, 2])
         else:
-            recovered_fish._offsets3d = ([], [], [])
+            recovered_fish._offsets3d = ([], [], [])  # type: ignore
 
         # Update predator and detection sphere
         nonlocal detection_sphere
         if school.predator_position is not None:
-            predator_plot._offsets3d = ([school.predator_position[0]],
+            predator_plot._offsets3d = ([school.predator_position[0]],  # type: ignore
                                        [school.predator_position[1]],
                                        [school.predator_position[2]])
 
@@ -520,7 +495,7 @@ def visualize_simulation(n_fish: int = 50, n_steps: int = 1000, predator_time: i
                 z = school.predator_detection_radius * np.outer(np.ones(np.size(u)), np.cos(v)) + school.predator_position[2]
                 detection_sphere = ax.plot_wireframe(x, y, z, color='red', alpha=0.1, linewidth=0.5)
         else:
-            predator_plot._offsets3d = ([], [], [])
+            predator_plot._offsets3d = ([], [], [])  # type: ignore
             # Remove detection sphere
             if detection_sphere is not None:
                 detection_sphere.remove()
