@@ -11,7 +11,6 @@ import numpy as np
 import numpy.typing as npt
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-from mpl_toolkits.mplot3d import Axes3D
 import csv
 
 
@@ -35,6 +34,7 @@ class Fish:
         if self.state == 'infected':
             if self.state_timer >= self.infected_duration:
                 self.state = 'recovered'
+                self.velocity = self.velocity / 2.0  # Slow down after startle response
                 self.state_timer = 0
 
         elif self.state == 'recovered':
@@ -529,11 +529,12 @@ if __name__ == "__main__":
     beta = 0.6   # Transmission probability (S -> I)
     gamma = 10   # Infected duration (frames)
     delta = 20   # Recovered duration (frames)
+    n_fish = 100
 
     print("Starting Fish School Simulator with SIRS Epidemic Model")
     print("=" * 60)
     print("Simulation parameters:")
-    print("  - Number of fish: 50")
+    print(f"  - Number of fish: {n_fish}")
     print("  - Predator appears at t=100 (spawns at school center)")
     print("  - Predator removed at t=200")
     print("  - Predator detection radius: 25 units")
@@ -553,5 +554,5 @@ if __name__ == "__main__":
     print("\nWatch for infection cascades when predator appears!")
     print("Console will show detection and cascade events...\n")
 
-    visualize_simulation(n_fish=50, n_steps=500, predator_time=100,
+    visualize_simulation(n_fish=n_fish, n_steps=500, predator_time=100,
                         beta=beta, gamma=gamma, delta=delta, show_plot=True)
