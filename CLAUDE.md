@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Python-based fish school simulator implementing the Couzin model for collective animal behavior combined with a SIRS epidemic model. The simulation models how fish schools respond to predators using epidemic dynamics: fish can be Susceptible (S), Infected (I, showing escape behavior), or Recovered (R, temporarily immune). Infection spreads through direct predator detection and social transmission between visible neighbors.
+This is a Python-based fish school simulator implementing the Couzin model for collective animal behavior combined with a SIRS epidemic model. The simulation models how fish schools respond to predators using epidemic dynamics: fish can be Susceptible (S), Infected (I, showing escape behavior), or Recovered (R, temporarily immune). Infection spreads through direct predator detection and social transmission using an empirically-determined probability model based on distance and visual prominence (ranked angular area).
 
 ## Development Environment
 
@@ -48,7 +48,10 @@ The simulation will open a 3D matplotlib visualization showing fish behavior ove
      - Zone of orientation (2.0-10.0 units): Align with neighbors
      - Zone of attraction (10.0-20.0 units): Stay with group
   2. **Predator Detection** (`check_predator_startle` method): Direct infection when susceptible fish detect predator within detection radius
-  3. **Epidemic Transmission** (`check_startle_cascade` method): Social transmission of infection from infected to susceptible neighbors within visual range (probability β)
+  3. **Empirical Startle Transmission** (`check_startle_cascade` method): Social transmission using logistic regression model
+     - Probability: P(s_i | s_j) = 1/(1 + exp(-β₁ - β₂·LMD - β₃·RAA))
+     - LMD (Log Metric Distance): log of Euclidean distance between fish
+     - RAA (Ranked Angular Area): normalized rank of apparent size on observer's retina (accounts for field of view, occlusion, and visual prominence)
 - Collects SIR dynamics data in `history` dict for analysis and export
 
 ### Key Parameters
@@ -59,11 +62,16 @@ The simulation will open a 3D matplotlib visualization showing fish behavior ove
 - `max_turn_rate`: Turning angle limit per timestep (0.3 radians)
 
 **SIRS Epidemic Parameters** (in `FishSchool.__init__`):
-- `beta` (β): Transmission probability when infected fish is within visual range of susceptible fish (default: 0.6)
+- `beta`: Kept for backward compatibility in plots/exports (default: 0.6) - NOT used for transmission probability
 - `gamma` (γ): Infected duration in frames before transition to recovered state (default: 10)
 - `delta` (δ): Recovered duration in frames before returning to susceptible state (default: 20)
 - `predator_detection_radius`: How far fish detect predators (25.0 units)
 - `visual_range`: Distance fish can see each other for social transmission (15.0 units)
+
+**Empirical Startle Transmission Parameters** (in `FishSchool.__init__`):
+- `beta_1`: Logistic regression intercept (0.103641)
+- `beta_2`: Log metric distance coefficient (-3.297823) - negative means closer fish have higher transmission probability
+- `beta_3`: Ranked angular area coefficient (-0.075034) - negative means more visually prominent fish have higher transmission probability
 
 ### Update Loop
 
@@ -119,6 +127,28 @@ All spatial calculations use numpy array operations:
 
 ### Neighbor Queries
 The `get_neighbors` method returns a list of (fish, distance) tuples within a given radius. This is used for both Couzin behavioral interactions and epidemic transmission.
+
+### Ranked Angular Area (RAA) Calculation
+The `_calculate_raa` method computes how visually prominent a startled fish appears to an observer, using simplified heuristics:
+
+**Field of View (FOV):**
+- Fish have 333° field of view (25° blind spot directly behind)
+- Calculate angle between observer's heading (velocity direction) and direction to target
+- Target visible if angle < 166.5° from forward direction
+- Uses dot product: `angle = arccos(observer_heading · direction_to_target)`
+
+**Occlusion Detection (Simplified):**
+- Fish B occludes fish C if B is significantly closer (20%+ threshold) AND in nearly same direction (< 5° angular difference)
+- Skips complex ray-tracing; captures most obvious occlusions
+- Compares all pairs of neighbors to determine visibility
+
+**Angular Size Ranking:**
+- Angular size on retina ∝ 1/distance² (assumes uniform fish size)
+- Among visible neighbors, compute angular size for each
+- Sort by angular size (largest/closest first)
+- Assign ranks: 1 (most prominent), 2, 3, ...
+- Normalize to [0, 1]: RAA = 1 - (rank-1)/(n_visible-1)
+- Result: RAA=1.0 for closest visible fish, RAA=0.0 for farthest, RAA=0.0 if not visible
 
 ### SIRS State Management
 - Fish states are tracked via string literals: 'susceptible', 'infected', 'recovered'
