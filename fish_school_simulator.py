@@ -108,13 +108,14 @@ def compute_occlusion_mask(
                 direction_j = positions[j] - observer_pos
                 direction_j_norm = direction_j / np.linalg.norm(direction_j)
 
-                # Are they in nearly the same direction? (< 5 degrees)
+                # Are they in nearly the same direction? (< 10 degrees)
+                # Updated from 5° to 10° to account for 3 cm fish body size
                 dot_prod = np.dot(direction_i_norm, direction_j_norm)
                 # Manual clip for numba compatibility
                 dot_prod = max(-1.0, min(1.0, dot_prod))
                 angular_diff = np.arccos(dot_prod)
 
-                if angular_diff < np.radians(5):
+                if angular_diff < np.radians(10):
                     not_occluded[i] = False
                     break
 
@@ -202,18 +203,30 @@ class FishSchool:
         n_fish: int = 50,
         space_size: float = 100,
         beta: float = 0.6,
-        gamma: int = 10,
+        gamma: int = 20,
         delta: int = 20,
     ) -> None:
         self.n_fish = n_fish
-        self.space_size = space_size
+        # Support both single space_size (for backward compatibility) and tuple
+        if isinstance(space_size, (tuple, list, np.ndarray)):
+            self.space_dimensions = np.array(space_size, dtype=float)
+        else:
+            self.space_dimensions = np.array(
+                [space_size, space_size, space_size], dtype=float
+            )
+        self.space_size = space_size  # Keep for backward compatibility
 
         # Couzin model parameters
-        self.zone_repulsion = 2.0  # Distance for repulsion
+        # Fish body size: 5.5 cm long ≈ 3 cm diameter sphere
+        # zone_repulsion set to 3.5 cm (> 3 cm diameter) to prevent physical overlap
+        self.zone_repulsion = 3.5  # Distance for repulsion (cm)
         self.zone_orientation = 10.0  # Distance for alignment
         self.zone_attraction = 20.0  # Distance for attraction
 
-        self.max_speed = 2.0
+        # Speed parameters (in cm/frame at 20 fps)
+        # min_speed: 0.5 cm/frame = 10 cm/s at 20 fps
+        # max_speed: 1.0 cm/frame = 20 cm/s at 20 fps
+        self.max_speed = 1.0
         self.min_speed = 0.5
         self.max_turn_rate = 0.3  # Maximum turning angle per step
 
@@ -242,8 +255,14 @@ class FishSchool:
         # Initialize fish
         self.fish = []
         for i in range(n_fish):
-            # Random positions
-            pos = np.random.uniform(0, space_size, 3)
+            # Random positions within the space dimensions
+            pos = np.array(
+                [
+                    np.random.uniform(0, self.space_dimensions[0]),
+                    np.random.uniform(0, self.space_dimensions[1]),
+                    np.random.uniform(0, self.space_dimensions[2]),
+                ]
+            )
             # Random initial velocities
             vel = np.random.uniform(-1, 1, 3)
             vel = self._normalize(vel) * self.min_speed
@@ -495,8 +514,9 @@ class FishSchool:
                             np.dot(direction_to_neighbor, direction_to_other), -1.0, 1.0
                         )
                     )
-                    # If angular difference < 5 degrees, consider occluded
-                    if angular_diff < np.radians(5):
+                    # If angular difference < 10 degrees, consider occluded
+                    # Updated from 5° to 10° to account for 3 cm fish body size
+                    if angular_diff < np.radians(10):
                         occluded = True
                         break
 
@@ -732,8 +752,19 @@ class FishSchool:
             )
 
     def apply_boundaries(self, fish: Fish) -> None:
-        """Apply periodic boundary conditions"""
-        fish.position = fish.position % self.space_size
+        """Apply reflective boundary conditions (bounce off walls like a tank)"""
+        for i in range(3):
+            # Check lower boundary
+            if fish.position[i] < 0:
+                fish.position[i] = -fish.position[i]  # Reflect position
+                fish.velocity[i] = -fish.velocity[i]  # Reverse velocity
+
+            # Check upper boundary
+            elif fish.position[i] > self.space_dimensions[i]:
+                fish.position[i] = (
+                    2 * self.space_dimensions[i] - fish.position[i]
+                )  # Reflect position
+                fish.velocity[i] = -fish.velocity[i]  # Reverse velocity
 
     def update(self) -> None:
         """Update simulation one time step"""
@@ -804,6 +835,11 @@ class FishSchool:
             # Spawn at school center for guaranteed interaction
             position = self.get_school_center()
         self.predator_position = np.array(position)
+
+        # Reset startle counters for this predator event
+        self.total_startles = 0
+        self.cascade_startles = 0
+
         print(
             f"\n[Frame {self.time_step}] PREDATOR SPAWNED at {self.predator_position}"
         )
@@ -900,8 +936,9 @@ def visualize_simulation(
     n_steps: int = 1000,
     predator_time: int = 100,
     beta: float = 0.6,
-    gamma: int = 10,
+    gamma: int = 20,
     delta: int = 20,
+    space_size: Any = 100,
     show_plot: bool = True,
 ) -> Tuple[FuncAnimation, FishSchool]:
     """Run and visualize the simulation with SIRS dynamics
@@ -919,8 +956,9 @@ def visualize_simulation(
         Tuple of (animation, school) for further analysis
     """
 
+    # Use space_size as-is (can be single value or tuple)
     school = FishSchool(
-        n_fish=n_fish, space_size=100, beta=beta, gamma=gamma, delta=delta
+        n_fish=n_fish, space_size=space_size, beta=beta, gamma=gamma, delta=delta
     )
 
     # Setup plot
@@ -936,9 +974,9 @@ def visualize_simulation(
     # Detection radius sphere (will be shown when predator is active)
     detection_sphere = None
 
-    ax.set_xlim(0, school.space_size)
-    ax.set_ylim(0, school.space_size)
-    ax.set_zlim(0, school.space_size)
+    ax.set_xlim(0, school.space_dimensions[0])
+    ax.set_ylim(0, school.space_dimensions[1])
+    ax.set_zlim(0, school.space_dimensions[2])
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_zlabel("Z")
@@ -1108,24 +1146,32 @@ def visualize_simulation(
 
 
 if __name__ == "__main__":
+    # Tank dimensions (in cm): 1m x 2m x 1m = 100cm x 200cm x 100cm
+    tank_dimensions = (100, 200, 100)
+
     # SIRS model parameters
     beta = 0.6  # Transmission probability (S -> I)
-    gamma = 10  # Infected duration (frames)
+    gamma = 20  # Infected duration (1 second at 20 fps)
     delta = 20  # Recovered duration (frames)
-    n_fish = 100
+    n_fish = 40
 
     print("Starting Fish School Simulator with SIRS Epidemic Model")
     print("=" * 60)
     print("Simulation parameters:")
     print(f"  - Number of fish: {n_fish}")
+    print(
+        f"  - Tank dimensions: {tank_dimensions[0]}cm x {tank_dimensions[1]}cm x {tank_dimensions[2]}cm (1m x 2m x 1m)"
+    )
+    print("  - Unstartled fish speed: 10 cm/s (0.5 cm/frame at 20 fps)")
+    print("  - Startled fish speed: 20 cm/s (1.0 cm/frame at 20 fps)")
     print("  - Predator appears at t=100 (spawns at school center)")
     print("  - Predator removed at t=200")
-    print("  - Predator detection radius: 25 units")
+    print("  - Predator detection radius: 25 cm")
     print("\nSIRS Model Parameters:")
     print(f"  - β (transmission probability): {beta}")
-    print(f"  - γ (infected duration): {gamma} frames")
-    print(f"  - δ (recovered duration): {delta} frames")
-    print("  - Visual range (fish-to-fish): 15 units")
+    print(f"  - γ (infected duration): {gamma} frames (1 second)")
+    print(f"  - δ (recovered duration): {delta} frames (1 second)")
+    print("  - Visual range (fish-to-fish): 15 cm")
     print("=" * 60)
     print("\nLegend:")
     print("  Blue dots = Susceptible (S)")
@@ -1144,5 +1190,6 @@ if __name__ == "__main__":
         beta=beta,
         gamma=gamma,
         delta=delta,
+        space_size=tank_dimensions,
         show_plot=True,
     )
