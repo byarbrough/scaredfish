@@ -14,6 +14,136 @@ import numpy.typing as npt
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import csv
+from numba import jit, prange
+from scipy.spatial import KDTree
+
+
+# JIT-compiled helper functions for performance
+@jit(nopython=True, cache=True)
+def compute_distances_vectorized(
+    positions: npt.NDArray[np.float64], target_position: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Vectorized distance computation for all fish to a target position"""
+    diff = positions - target_position
+    return np.sqrt(np.sum(diff * diff, axis=1))
+
+
+@jit(nopython=True, cache=True)
+def compute_pairwise_distances(
+    positions: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """Compute all pairwise distances between positions"""
+    n = positions.shape[0]
+    distances = np.zeros((n, n), dtype=np.float64)
+    for i in range(n):
+        for j in range(i + 1, n):
+            diff = positions[i] - positions[j]
+            dist = np.sqrt(np.sum(diff * diff))
+            distances[i, j] = dist
+            distances[j, i] = dist
+    return distances
+
+
+@jit(nopython=True, cache=True)
+def check_field_of_view(
+    observer_velocity: npt.NDArray[np.float64],
+    directions_to_targets: npt.NDArray[np.float64],
+) -> npt.NDArray[np.bool_]:
+    """Vectorized FOV check for multiple targets
+
+    Returns boolean array indicating which targets are in FOV
+    """
+    observer_heading = observer_velocity / np.linalg.norm(observer_velocity)
+    max_fov_angle = np.radians(166.5)
+
+    n_targets = directions_to_targets.shape[0]
+    in_fov = np.zeros(n_targets, dtype=np.bool_)
+
+    for i in range(n_targets):
+        direction_normalized = directions_to_targets[i] / np.linalg.norm(
+            directions_to_targets[i]
+        )
+        dot_product = np.dot(observer_heading, direction_normalized)
+        # Manual clip instead of np.clip for numba compatibility
+        dot_product = max(-1.0, min(1.0, dot_product))
+        angle = np.arccos(dot_product)
+        in_fov[i] = angle <= max_fov_angle
+
+    return in_fov
+
+
+@jit(nopython=True, cache=True)
+def compute_occlusion_mask(
+    positions: npt.NDArray[np.float64],
+    distances: npt.NDArray[np.float64],
+    observer_idx: int,
+) -> npt.NDArray[np.bool_]:
+    """Compute which targets are occluded by closer fish
+
+    Returns boolean array where True means NOT occluded
+    """
+    n = positions.shape[0]
+    not_occluded = np.ones(n, dtype=np.bool_)
+    not_occluded[observer_idx] = False  # Can't see self
+
+    observer_pos = positions[observer_idx]
+
+    for i in range(n):
+        if i == observer_idx or not_occluded[i] == False:
+            continue
+
+        direction_i = positions[i] - observer_pos
+        direction_i_norm = direction_i / np.linalg.norm(direction_i)
+        dist_i = distances[observer_idx, i]
+
+        # Check if any other fish occludes this one
+        for j in range(n):
+            if j == observer_idx or j == i:
+                continue
+
+            dist_j = distances[observer_idx, j]
+
+            # Is j significantly closer? (20% threshold)
+            if dist_j < dist_i * 0.8:
+                direction_j = positions[j] - observer_pos
+                direction_j_norm = direction_j / np.linalg.norm(direction_j)
+
+                # Are they in nearly the same direction? (< 5 degrees)
+                dot_prod = np.dot(direction_i_norm, direction_j_norm)
+                # Manual clip for numba compatibility
+                dot_prod = max(-1.0, min(1.0, dot_prod))
+                angular_diff = np.arccos(dot_prod)
+
+                if angular_diff < np.radians(5):
+                    not_occluded[i] = False
+                    break
+
+    return not_occluded
+
+
+@jit(nopython=True, cache=True)
+def compute_startle_probabilities(
+    distances: npt.NDArray[np.float64],
+    raas: npt.NDArray[np.float64],
+    beta_1: float,
+    beta_2: float,
+    beta_3: float,
+) -> npt.NDArray[np.float64]:
+    """Vectorized startle probability computation"""
+    n = len(distances)
+    probs = np.zeros(n, dtype=np.float64)
+
+    for i in range(n):
+        if raas[i] == 0.0:
+            probs[i] = 0.0
+        else:
+            # Avoid log(0)
+            dist = max(distances[i], 0.01)
+            lmd = np.log(dist)
+            logit = beta_1 + beta_2 * lmd + beta_3 * raas[i]
+            probs[i] = 1.0 / (1.0 + np.exp(-logit))
+
+    return probs
 
 
 class Fish:
@@ -123,6 +253,11 @@ class FishSchool:
 
         self.time_step = 0
 
+        # Spatial indexing for fast neighbor queries
+        self.spatial_tree: Optional[KDTree] = None
+        self._cached_positions: Optional[npt.NDArray[np.float64]] = None
+        self._cached_velocities: Optional[npt.NDArray[np.float64]] = None
+
     def _normalize(self, vector: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         """Normalize a vector"""
         norm = np.linalg.norm(vector)
@@ -165,15 +300,139 @@ class FishSchool:
         speed = np.linalg.norm(current_vel)
         return new_dir * speed
 
+    def _rebuild_spatial_index(self) -> None:
+        """Rebuild spatial index and cache position/velocity arrays"""
+        self._cached_positions = np.array(
+            [f.position for f in self.fish], dtype=np.float64
+        )
+        self._cached_velocities = np.array(
+            [f.velocity for f in self.fish], dtype=np.float64
+        )
+        self.spatial_tree = KDTree(self._cached_positions)
+
     def get_neighbors(self, fish: Fish, radius: float) -> List[Tuple[Fish, float]]:
-        """Get all neighbors within radius"""
+        """Get all neighbors within radius using spatial indexing"""
+        if self.spatial_tree is None:
+            self._rebuild_spatial_index()
+
+        assert self.spatial_tree is not None
+        # Query spatial tree for neighbors
+        indices = self.spatial_tree.query_ball_point(fish.position, radius)
+
         neighbors = []
-        for other in self.fish:
-            if other.id != fish.id:
-                dist = np.linalg.norm(fish.position - other.position)
-                if dist < radius:
-                    neighbors.append((other, dist))
+        for idx in indices:
+            if self.fish[idx].id != fish.id:
+                dist = np.linalg.norm(fish.position - self.fish[idx].position)
+                neighbors.append((self.fish[idx], dist))
         return neighbors
+
+    def get_neighbors_fast(
+        self, fish_idx: int, radius: float
+    ) -> Tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
+        """Fast neighbor query returning indices and distances
+
+        Returns:
+            Tuple of (neighbor_indices, distances)
+        """
+        if self.spatial_tree is None or self._cached_positions is None:
+            self._rebuild_spatial_index()
+
+        assert self._cached_positions is not None
+        assert self.spatial_tree is not None
+        indices = self.spatial_tree.query_ball_point(
+            self._cached_positions[fish_idx], radius
+        )
+
+        # Filter out self
+        indices = [i for i in indices if i != fish_idx]
+
+        if not indices:
+            return np.array([], dtype=np.int64), np.array([], dtype=np.float64)
+
+        indices = np.array(indices, dtype=np.int64)
+        # Compute distances vectorized
+        distances = np.linalg.norm(
+            self._cached_positions[indices] - self._cached_positions[fish_idx], axis=1
+        )
+
+        return indices, distances
+
+    def _calculate_raa_batch(
+        self, observer_idx: int, target_indices: npt.NDArray[np.int64]
+    ) -> npt.NDArray[np.float64]:
+        """Calculate RAA for multiple targets at once (vectorized)
+
+        Args:
+            observer_idx: Index of observing fish
+            target_indices: Array of target fish indices
+
+        Returns:
+            Array of RAA values for each target
+        """
+        if len(target_indices) == 0:
+            return np.array([], dtype=np.float64)
+
+        if self._cached_positions is None or self._cached_velocities is None:
+            self._rebuild_spatial_index()
+
+        assert self._cached_positions is not None
+        assert self._cached_velocities is not None
+
+        # Get all neighbors within visual range
+        neighbor_indices, neighbor_distances = self.get_neighbors_fast(
+            observer_idx, self.visual_range
+        )
+
+        if len(neighbor_indices) == 0:
+            return np.zeros(len(target_indices), dtype=np.float64)
+
+        # Calculate directions from observer to all neighbors
+        observer_pos = self._cached_positions[observer_idx]
+        observer_vel = self._cached_velocities[observer_idx]
+        neighbor_positions = self._cached_positions[neighbor_indices]
+        directions = neighbor_positions - observer_pos
+
+        # Check field of view for all neighbors
+        in_fov = check_field_of_view(observer_vel, directions)
+
+        # Compute occlusion mask
+        all_distances = np.linalg.norm(self._cached_positions - observer_pos, axis=1)
+        not_occluded = compute_occlusion_mask(
+            self._cached_positions,
+            all_distances.reshape(1, -1).repeat(len(self._cached_positions), axis=0),
+            observer_idx,
+        )
+
+        # Combine FOV and occlusion to get visible fish
+        visible_mask = np.zeros(len(self._cached_positions), dtype=bool)
+        visible_mask[neighbor_indices] = in_fov & not_occluded[neighbor_indices]
+
+        if not np.any(visible_mask):
+            return np.zeros(len(target_indices), dtype=np.float64)
+
+        # Calculate angular sizes for visible fish
+        visible_indices = np.where(visible_mask)[0]
+        visible_distances = all_distances[visible_indices]
+        angular_sizes = 1.0 / (visible_distances * visible_distances)
+
+        # Sort by angular size (largest first) and get ranks
+        sorted_order = np.argsort(-angular_sizes)  # Negative for descending
+        ranks = np.empty(len(sorted_order), dtype=np.int64)
+        ranks[sorted_order] = np.arange(1, len(sorted_order) + 1)
+
+        # Create mapping from fish index to RAA
+        raa_map = np.zeros(len(self._cached_positions), dtype=np.float64)
+        n_visible = len(visible_indices)
+
+        if n_visible == 1:
+            raa_map[visible_indices] = 1.0
+        else:
+            # Normalize ranks to [0, 1]
+            raa_values = 1.0 - (ranks - 1) / (n_visible - 1)
+            raa_map[visible_indices] = raa_values
+
+        # Return RAA values for requested targets
+        return raa_map[target_indices]
 
     def _calculate_raa(self, observer: Fish, target: Fish) -> float:
         """Calculate Ranked Angular Area of target fish on observer's retina
@@ -378,19 +637,27 @@ class FishSchool:
         return desired_velocity
 
     def check_predator_startle(self) -> None:
-        """Check if any fish detect predator and become infected"""
+        """Check if any fish detect predator and become infected (optimized)"""
         if self.predator_position is None:
             return
 
+        if self._cached_positions is None:
+            self._rebuild_spatial_index()
+
+        assert self._cached_positions is not None
+
+        # Vectorized distance calculation
+        distances = compute_distances_vectorized(
+            self._cached_positions, self.predator_position
+        )
+
+        # Find susceptible fish within detection radius
         startled_this_frame = 0
-        for fish in self.fish:
-            if fish.state == "susceptible":
-                dist = np.linalg.norm(fish.position - self.predator_position)
-                if dist < self.predator_detection_radius:
-                    # Fish detects predator and becomes infected
-                    fish.infect()
-                    startled_this_frame += 1
-                    self.total_startles += 1
+        for fish, dist in zip(self.fish, distances):
+            if fish.state == "susceptible" and dist < self.predator_detection_radius:
+                fish.infect()
+                startled_this_frame += 1
+                self.total_startles += 1
 
         if startled_this_frame > 0:
             print(
@@ -398,29 +665,70 @@ class FishSchool:
             )
 
     def check_startle_cascade(self) -> None:
-        """Check if infected fish trigger cascade in susceptible neighbors using empirical model"""
-        newly_infected = []
+        """Check if infected fish trigger cascade in susceptible neighbors using empirical model (optimized)"""
+        # Rebuild spatial index with current positions
+        self._rebuild_spatial_index()
 
-        for fish in self.fish:
-            # Only infected fish can transmit
-            if fish.state == "infected" and fish not in newly_infected:
-                # Get visible neighbors
-                neighbors = self.get_neighbors(fish, self.visual_range)
+        assert self._cached_positions is not None
 
-                for neighbor, dist in neighbors:
-                    # Only susceptible fish can be infected
-                    if neighbor.state == "susceptible":
-                        # Calculate probability using empirical model (LMD + RAA)
-                        prob = self.calculate_startle_probability(neighbor, fish)
+        # Get indices of infected and susceptible fish
+        infected_indices = [i for i, f in enumerate(self.fish) if f.state == "infected"]
+        susceptible_indices = np.array(
+            [i for i, f in enumerate(self.fish) if f.state == "susceptible"],
+            dtype=np.int64,
+        )
 
-                        if np.random.random() < prob:
-                            neighbor.infect()
-                            newly_infected.append(neighbor)
-                            self.cascade_startles += 1
+        if len(infected_indices) == 0 or len(susceptible_indices) == 0:
+            return
 
-        if len(newly_infected) > 0:
+        newly_infected_count = 0
+
+        # Process each infected fish
+        for infected_idx in infected_indices:
+            # Get susceptible neighbors within visual range
+            neighbor_indices, neighbor_distances = self.get_neighbors_fast(
+                infected_idx, self.visual_range
+            )
+
+            if len(neighbor_indices) == 0:
+                continue
+
+            # Filter to only susceptible fish
+            susceptible_mask = np.isin(neighbor_indices, susceptible_indices)
+            susceptible_neighbors = neighbor_indices[susceptible_mask]
+            susceptible_distances = neighbor_distances[susceptible_mask]
+
+            if len(susceptible_neighbors) == 0:
+                continue
+
+            # Batch calculate RAA values (observer = susceptible, target = infected)
+            # We need RAA from each susceptible fish's perspective looking at the infected fish
+            raas = np.zeros(len(susceptible_neighbors), dtype=np.float64)
+            for i, susc_idx in enumerate(susceptible_neighbors):
+                # Calculate RAA for this susceptible fish observing the infected fish
+                raa_values = self._calculate_raa_batch(
+                    int(susc_idx), np.array([infected_idx], dtype=np.int64)
+                )
+                raas[i] = raa_values[0] if len(raa_values) > 0 else 0.0
+
+            # Calculate probabilities using vectorized function
+            probs = compute_startle_probabilities(
+                susceptible_distances, raas, self.beta_1, self.beta_2, self.beta_3
+            )
+
+            # Randomly determine infections
+            random_values = np.random.random(len(probs))
+            infected_mask = random_values < probs
+
+            # Infect susceptible fish
+            for susc_idx in susceptible_neighbors[infected_mask]:
+                self.fish[susc_idx].infect()
+                newly_infected_count += 1
+                self.cascade_startles += 1
+
+        if newly_infected_count > 0:
             print(
-                f"[Frame {self.time_step}] CASCADE: {len(newly_infected)} fish infected by seeing others!"
+                f"[Frame {self.time_step}] CASCADE: {newly_infected_count} fish infected by seeing others!"
             )
 
     def apply_boundaries(self, fish: Fish) -> None:
@@ -430,6 +738,9 @@ class FishSchool:
     def update(self) -> None:
         """Update simulation one time step"""
         self.time_step += 1
+
+        # Rebuild spatial index with current positions for fast neighbor queries
+        self._rebuild_spatial_index()
 
         # Check for predator-induced infections
         self.check_predator_startle()
@@ -681,8 +992,8 @@ def visualize_simulation(
         # Update plots for each state
         if susceptible_positions:
             susceptible_positions = np.array(susceptible_positions)
-            susceptible_fish._offsets3d = (
-                susceptible_positions[:, 0],  # type: ignore
+            susceptible_fish._offsets3d = (  # type: ignore
+                susceptible_positions[:, 0],
                 susceptible_positions[:, 1],
                 susceptible_positions[:, 2],
             )
@@ -691,8 +1002,8 @@ def visualize_simulation(
 
         if infected_positions:
             infected_positions = np.array(infected_positions)
-            infected_fish._offsets3d = (
-                infected_positions[:, 0],  # type: ignore
+            infected_fish._offsets3d = (  # type: ignore
+                infected_positions[:, 0],
                 infected_positions[:, 1],
                 infected_positions[:, 2],
             )
@@ -701,8 +1012,8 @@ def visualize_simulation(
 
         if recovered_positions:
             recovered_positions = np.array(recovered_positions)
-            recovered_fish._offsets3d = (
-                recovered_positions[:, 0],  # type: ignore
+            recovered_fish._offsets3d = (  # type: ignore
+                recovered_positions[:, 0],
                 recovered_positions[:, 1],
                 recovered_positions[:, 2],
             )
@@ -712,8 +1023,8 @@ def visualize_simulation(
         # Update predator and detection sphere
         nonlocal detection_sphere
         if school.predator_position is not None:
-            predator_plot._offsets3d = (
-                [school.predator_position[0]],  # type: ignore
+            predator_plot._offsets3d = (  # type: ignore
+                [school.predator_position[0]],
                 [school.predator_position[1]],
                 [school.predator_position[2]],
             )

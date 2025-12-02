@@ -1,6 +1,7 @@
 """
 Quick test of empirical startle transmission model
 """
+
 import numpy as np
 from fish_school_simulator import Fish, FishSchool
 
@@ -18,7 +19,7 @@ def test_startle_probability():
     fish_observer = Fish(
         position=[50, 50, 50],
         velocity=[1, 0, 0],  # heading in +x direction
-        fish_id=100
+        fish_id=100,
     )
 
     # Test different scenarios
@@ -34,11 +35,7 @@ def test_startle_probability():
     print("-" * 60)
 
     for scenario_name, pos, vel in scenarios:
-        fish_startled = Fish(
-            position=pos,
-            velocity=vel,
-            fish_id=101
-        )
+        fish_startled = Fish(position=pos, velocity=vel, fish_id=101)
 
         # Add both fish to school temporarily
         school.fish = [fish_observer, fish_startled]
@@ -65,7 +62,9 @@ def test_startle_probability():
     print("\nExpected behavior:")
     print("  - Closer fish should have HIGHER probability")
     print("  - Fish in blind spot should have probability = 0")
-    print("  - More visually prominent fish (higher RAA) should have higher probability")
+    print(
+        "  - More visually prominent fish (higher RAA) should have higher probability"
+    )
 
 
 if __name__ == "__main__":
