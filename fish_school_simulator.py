@@ -173,12 +173,17 @@ class Fish:
         if self.state == "infected":
             if self.state_timer >= self.infected_duration:
                 self.state = "recovered"
-                self.velocity = self.velocity / 2.0  # Slow down after startle response
+                # Slow down to 5 cm/s (0.25 cm/frame at 20 fps) after startle response
+                velocity_direction = self.velocity / np.linalg.norm(self.velocity)
+                self.velocity = velocity_direction * 0.25
                 self.state_timer = 0
 
         elif self.state == "recovered":
             if self.state_timer >= self.recovered_duration:
                 self.state = "susceptible"
+                # Return to average susceptible speed: 10 cm/s (0.5 cm/frame at 20 fps)
+                velocity_direction = self.velocity / np.linalg.norm(self.velocity)
+                self.velocity = velocity_direction * 0.5
                 self.state_timer = 0
 
     def infect(self) -> None:
@@ -186,8 +191,9 @@ class Fish:
         if self.state == "susceptible":
             self.state = "infected"
             self.state_timer = 0
-            # Startle causes rapid acceleration away
-            self.velocity *= 2.0
+            # Startle causes rapid acceleration to 35 cm/s (1.75 cm/frame at 20 fps)
+            velocity_direction = self.velocity / np.linalg.norm(self.velocity)
+            self.velocity = velocity_direction * 1.75
 
 
 class FishSchool:
@@ -876,6 +882,9 @@ class FishSchool:
         if selected_fish is None:
             selected_fish = np.random.choice(self.fish)
 
+        # Type narrowing: ensure selected_fish is not None
+        assert selected_fish is not None
+
         # Store the selected fish ID for confusion matrix tracking
         self.selected_fish_id = selected_fish.id
 
@@ -1398,10 +1407,10 @@ if __name__ == "__main__":
     # Tank dimensions (in cm): 1m x 2m x 1m = 100cm x 200cm x 100cm
     tank_dimensions = (100, 200, 100)
 
-    # SIRS model parameters
-    beta = 0  # Not used; Transmission probability (S -> I)
-    gamma = 20  # Infected duration (1 second at 20 fps)
-    delta = 40  # Recovered duration (frames)
+    # SIRS model parameters at 20 fps
+    beta = 0  # Not used
+    gamma = 10  # Infected duration (frames)
+    delta = 1  # Recovered duration (frames)
     n_fish = 40
 
     print("Starting Fish School Simulator with SIRS Epidemic Model")
