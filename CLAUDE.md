@@ -14,8 +14,11 @@ This is a Python-based fish school simulator implementing the Couzin model for c
 python3 -m venv .venv
 source .venv/bin/activate  # On macOS/Linux
 
-# Install dependencies
+# Install dependencies for simulation
 pip install -r requirements.txt
+
+# Additional dependencies for data analysis notebooks (optional)
+pip install pandas scikit-learn statsmodels
 ```
 
 ### Running the Simulation
@@ -28,6 +31,15 @@ python fish_school_simulator.py
 ```
 
 The simulation will open a 3D matplotlib visualization showing fish behavior over time. A predator spawns at t=100 frames (at the school's center) and is removed at t=200. After the simulation completes, a SIRS dynamics plot is displayed and data is exported to a CSV file named `{beta}_{gamma}_{delta}.csv`.
+
+### Working with Empirical Data
+The repository includes Jupyter notebooks for analyzing the empirical data that informed the model:
+
+- **`regression.ipynb`**: Reproduces the logistic regression coefficients from research paper. Fits the startle transmission probability model P(s_i | s_j) using experimental data from `realdata/first_responders_srk*.csv`.
+- **`datafit.ipynb`**: Explores different model formulations and feature selections for predicting startle responses. Tests various combinations of distance metrics, angular area, loom, etc.
+- **`realdata/` folder**: Contains CSV and HDF5 files from actual golden shiner fish experiments, including cascade data and first responder analysis.
+
+The current empirical coefficients (β₁=0.103641, β₂=-3.297823, β₃=-0.075034) were derived by fitting to "Schreck only" data (schreckstoff hormone condition), as shown in `regression.ipynb`.
 
 ## Architecture
 
@@ -50,7 +62,7 @@ The simulation will open a 3D matplotlib visualization showing fish behavior ove
   2. **Predator Detection** (`check_predator_startle` method): Direct infection when susceptible fish detect predator within detection radius
   3. **Empirical Startle Transmission** (`check_startle_cascade` method): Social transmission using logistic regression model
      - Probability: P(s_i | s_j) = 1/(1 + exp(-β₁ - β₂·LMD - β₃·RAA))
-     - LMD (Log Metric Distance): log of Euclidean distance between fish
+     - LMD (Log Metric Distance): log₁₀ of Euclidean distance between fish
      - RAA (Ranked Angular Area): normalized rank of apparent size on observer's retina (accounts for field of view, occlusion, and visual prominence)
 - Collects SIR dynamics data in `history` dict for analysis and export
 
@@ -70,8 +82,9 @@ The simulation will open a 3D matplotlib visualization showing fish behavior ove
 
 **Empirical Startle Transmission Parameters** (in `FishSchool.__init__`):
 - `beta_1`: Logistic regression intercept (0.103641)
-- `beta_2`: Log metric distance coefficient (-3.297823) - negative means closer fish have higher transmission probability
+- `beta_2`: Log₁₀ metric distance coefficient (-3.297823) - negative means closer fish have higher transmission probability
 - `beta_3`: Ranked angular area coefficient (-0.075034) - negative means more visually prominent fish have higher transmission probability
+- **Note**: LMD uses base-10 logarithm (`np.log10`), not natural log, for distance calculation
 
 ### Update Loop
 

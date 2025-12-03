@@ -140,7 +140,7 @@ def compute_startle_probabilities(
         else:
             # Avoid log(0)
             dist = max(distances[i], 0.01)
-            lmd = np.log(dist)
+            lmd = np.log10(dist)
             logit = beta_1 + beta_2 * lmd + beta_3 * raas[i]
             probs[i] = 1.0 / (1.0 + np.exp(-logit))
 
@@ -218,10 +218,10 @@ class FishSchool:
 
         # Couzin model parameters
         # Fish body size: 5.5 cm long ≈ 3 cm diameter sphere
-        # zone_repulsion set to 3.5 cm (> 3 cm diameter) to prevent physical overlap
-        self.zone_repulsion = 3.5  # Distance for repulsion (cm)
-        self.zone_orientation = 10.0  # Distance for alignment
-        self.zone_attraction = 20.0  # Distance for attraction
+        # Zones rebalanced to maintain proper schooling behavior (4x and 8x ratios)
+        self.zone_repulsion = 3.0  # Distance for repulsion (cm) - prevents overlap
+        self.zone_orientation = 12.0  # Distance for alignment (4× repulsion)
+        self.zone_attraction = 24.0  # Distance for attraction (8× repulsion)
 
         # Speed parameters (in cm/frame at 20 fps)
         # min_speed: 0.5 cm/frame = 10 cm/s at 20 fps
@@ -242,12 +242,29 @@ class FishSchool:
 
         # Startle cascade parameters
         self.predator_position = None
-        self.predator_detection_radius = 25.0  # Increased for better detection
-        self.visual_range = 15.0  # How far fish can see each other
+        self.predator_detection_radius = 50.0  # Increased for better detection
+        self.visual_range = (
+            120.0  # How far fish can see each other for social transmission
+        )
 
         # Debug tracking
         self.total_startles = 0
         self.cascade_startles = 0
+
+        # Confusion matrix tracking for cascade effectiveness
+        self.selected_fish_id: Optional[int] = None  # ID of fish that spawns predator
+        self.fish_within_range_at_spawn: set[int] = (
+            set()
+        )  # IDs of fish within range when predator spawned
+        self.fish_that_startled: set[int] = (
+            set()
+        )  # IDs of fish that startled during predator presence
+        self.confusion_matrix = {
+            "true_positive": 0,  # Within range, startled via cascade
+            "false_positive": 0,  # NOT within range, startled via cascade
+            "true_negative": 0,  # NOT within range, did NOT startle
+            "false_negative": 0,  # Within range, did NOT startle
+        }
 
         # Data collection for SIR dynamics
         self.history = {"time": [], "S": [], "I": [], "R": []}
@@ -587,8 +604,8 @@ class FishSchool:
         if distance < 0.01:
             distance = 0.01
 
-        # LMD: log of metric distance
-        lmd = np.log(distance)
+        # LMD: log10 of metric distance
+        lmd = np.log10(distance)
 
         # RAA: Calculate ranked angular area
         raa = self._calculate_raa(observer, startled_fish)
@@ -600,7 +617,8 @@ class FishSchool:
         # Logistic regression model
         logit = self.beta_1 + self.beta_2 * lmd + self.beta_3 * raa
         probability = 1.0 / (1.0 + np.exp(-logit))
-
+        # NOTE: This function is NOT used during cascade checks!
+        # Cascades use compute_startle_probabilities() (JIT-compiled) which has its own RAA==0 check
         return probability
 
     def couzin_behavior(self, fish: Fish) -> npt.NDArray[np.float64]:
@@ -657,32 +675,14 @@ class FishSchool:
         return desired_velocity
 
     def check_predator_startle(self) -> None:
-        """Check if any fish detect predator and become infected (optimized)"""
-        if self.predator_position is None:
-            return
+        """DISABLED: Direct predator detection is now disabled.
 
-        if self._cached_positions is None:
-            self._rebuild_spatial_index()
-
-        assert self._cached_positions is not None
-
-        # Vectorized distance calculation
-        distances = compute_distances_vectorized(
-            self._cached_positions, self.predator_position
-        )
-
-        # Find susceptible fish within detection radius
-        startled_this_frame = 0
-        for fish, dist in zip(self.fish, distances):
-            if fish.state == "susceptible" and dist < self.predator_detection_radius:
-                fish.infect()
-                startled_this_frame += 1
-                self.total_startles += 1
-
-        if startled_this_frame > 0:
-            print(
-                f"[Frame {self.time_step}] {startled_this_frame} fish detected predator!"
-            )
+        The selected fish is infected directly in spawn_predator().
+        All other startles must occur via cascade (social transmission).
+        This allows testing cascade effectiveness with a confusion matrix.
+        """
+        # Do nothing - cascade-only transmission
+        return
 
     def check_startle_cascade(self) -> None:
         """Check if infected fish trigger cascade in susceptible neighbors using empirical model (optimized)"""
@@ -703,6 +703,11 @@ class FishSchool:
 
         newly_infected_count = 0
 
+        # Debug tracking
+        total_neighbors_in_range = 0
+        total_with_nonzero_raa = 0
+        total_susceptible_checked = 0
+
         # Process each infected fish
         for infected_idx in infected_indices:
             # Get susceptible neighbors within visual range
@@ -721,6 +726,9 @@ class FishSchool:
             if len(susceptible_neighbors) == 0:
                 continue
 
+            total_neighbors_in_range += len(susceptible_neighbors)
+            total_susceptible_checked += 1
+
             # Batch calculate RAA values (observer = susceptible, target = infected)
             # We need RAA from each susceptible fish's perspective looking at the infected fish
             raas = np.zeros(len(susceptible_neighbors), dtype=np.float64)
@@ -731,10 +739,25 @@ class FishSchool:
                 )
                 raas[i] = raa_values[0] if len(raa_values) > 0 else 0.0
 
+            # Track RAA visibility
+            nonzero_raas = np.sum(raas > 0.0)
+            total_with_nonzero_raa += nonzero_raas
+
             # Calculate probabilities using vectorized function
             probs = compute_startle_probabilities(
                 susceptible_distances, raas, self.beta_1, self.beta_2, self.beta_3
             )
+
+            # Debug: print detailed info for visible fish
+            if nonzero_raas > 0:
+                for i in range(len(raas)):
+                    if raas[i] > 0:
+                        print(
+                            f"  Susceptible fish {susceptible_neighbors[i]}: "
+                            f"dist={susceptible_distances[i]:.2f}cm, "
+                            f"RAA={raas[i]:.3f}, "
+                            f"prob={probs[i]:.3f}"
+                        )
 
             # Randomly determine infections
             random_values = np.random.random(len(probs))
@@ -745,10 +768,21 @@ class FishSchool:
                 self.fish[susc_idx].infect()
                 newly_infected_count += 1
                 self.cascade_startles += 1
+                # Track that this fish startled (for confusion matrix)
+                self.fish_that_startled.add(self.fish[susc_idx].id)
+
+        # Debug output every frame with infected fish
+        if total_susceptible_checked > 0:
+            print(
+                f"[Frame {self.time_step}] CASCADE CHECK: {len(infected_indices)} infected, "
+                f"{total_neighbors_in_range} susceptible in range, "
+                f"{total_with_nonzero_raa} visible (RAA>0), "
+                f"{newly_infected_count} newly infected"
+            )
 
         if newly_infected_count > 0:
             print(
-                f"[Frame {self.time_step}] CASCADE: {newly_infected_count} fish infected by seeing others!"
+                f"[Frame {self.time_step}] CASCADE SUCCESS: {newly_infected_count} fish infected by seeing others!"
             )
 
     def apply_boundaries(self, fish: Fish) -> None:
@@ -829,31 +863,155 @@ class FishSchool:
         positions = np.array([fish.position for fish in self.fish])
         return np.mean(positions, axis=0)
 
-    def spawn_predator(self, position: Optional[npt.ArrayLike] = None) -> None:
-        """Spawn predator at position (defaults to school center)"""
-        if position is None:
-            # Spawn at school center for guaranteed interaction
-            position = self.get_school_center()
-        self.predator_position = np.array(position)
+    def spawn_predator(
+        self, selected_fish: Optional[Fish] = None, offset_distance: float = 5.0
+    ) -> None:
+        """Spawn predator near a randomly selected fish
 
-        # Reset startle counters for this predator event
-        self.total_startles = 0
-        self.cascade_startles = 0
+        Args:
+            selected_fish: Fish to spawn near (if None, randomly selects one)
+            offset_distance: Distance offset from selected fish (in cm)
+        """
+        # Randomly select a fish if not provided
+        if selected_fish is None:
+            selected_fish = np.random.choice(self.fish)
+
+        # Store the selected fish ID for confusion matrix tracking
+        self.selected_fish_id = selected_fish.id
+
+        # Spawn predator near the selected fish with a small random offset
+        random_direction = np.random.randn(3)
+        random_direction = self._normalize(random_direction)
+        self.predator_position = (
+            selected_fish.position + random_direction * offset_distance
+        )
+
+        # Immediately infect the selected fish (initial startle)
+        selected_fish.infect()
+        self.total_startles = 1  # Count the initial selected fish
+        self.cascade_startles = 0  # Reset cascade counter
+
+        # Reset tracking for this predator event
+        self.fish_within_range_at_spawn = set()
+        self.fish_that_startled = set()
+
+        # Store which fish are within detection range at spawn time (for confusion matrix)
+        for fish in self.fish:
+            distance = np.linalg.norm(fish.position - self.predator_position)
+            if distance < self.predator_detection_radius:
+                self.fish_within_range_at_spawn.add(fish.id)
 
         print(
-            f"\n[Frame {self.time_step}] PREDATOR SPAWNED at {self.predator_position}"
+            f"\n[Frame {self.time_step}] PREDATOR SPAWNED near fish {selected_fish.id}"
         )
-        print(f"  Detection radius: {self.predator_detection_radius}")
+        print(f"  Predator position: {self.predator_position}")
+        print(f"  Selected fish position: {selected_fish.position}")
+        print(f"  Distance to selected fish: {offset_distance:.2f} cm")
+        print(f"  Detection radius: {self.predator_detection_radius} cm")
+        print(
+            f"  Fish within detection range: {len(self.fish_within_range_at_spawn)}/{len(self.fish)}"
+        )
+        print(f"  Fish IDs within range: {sorted(self.fish_within_range_at_spawn)}")
 
-        # Print distances to nearest fish
-        distances = [
-            np.linalg.norm(fish.position - self.predator_position) for fish in self.fish
-        ]
-        distances.sort()
-        print(f"  Nearest 5 fish: {distances[:5]}")
+    def calculate_confusion_matrix(self) -> None:
+        """Calculate confusion matrix comparing predator range vs cascade effectiveness
+
+        Ground truth: Whether fish was within predator detection radius AT SPAWN TIME
+        Prediction: Whether fish startled (infected or recovered state) by removal time
+
+        Excludes the initially selected fish from the matrix.
+        """
+        if self.selected_fish_id is None:
+            print("Warning: Cannot calculate confusion matrix - selected fish not set")
+            return
+
+        # Reset confusion matrix
+        self.confusion_matrix = {
+            "true_positive": 0,
+            "false_positive": 0,
+            "true_negative": 0,
+            "false_negative": 0,
+        }
+
+        for fish in self.fish:
+            # Skip the initially selected fish
+            if fish.id == self.selected_fish_id:
+                continue
+
+            # Use stored information about whether fish was within range at spawn
+            within_range = fish.id in self.fish_within_range_at_spawn
+
+            # Check if fish startled at any point during predator presence (via cascade)
+            startled = fish.id in self.fish_that_startled
+
+            # Populate confusion matrix
+            if within_range and startled:
+                self.confusion_matrix["true_positive"] += 1
+            elif not within_range and startled:
+                self.confusion_matrix["false_positive"] += 1
+            elif not within_range and not startled:
+                self.confusion_matrix["true_negative"] += 1
+            elif within_range and not startled:
+                self.confusion_matrix["false_negative"] += 1
+
+        # Print results
+        print("\n" + "=" * 60)
+        print("CONFUSION MATRIX - Cascade Effectiveness")
+        print("=" * 60)
+        print("Ground Truth: Within predator detection range AT SPAWN TIME")
+        print("Prediction: Fish startled via cascade DURING PREDATOR PRESENCE")
+        print(f"(Excluding initially selected fish #{self.selected_fish_id})")
+        print(
+            f"({len(self.fish_within_range_at_spawn) - 1} fish were within range at spawn, excluding selected)"
+        )
+        print(f"({len(self.fish_that_startled)} fish startled via cascade)")
+        print()
+        print(f"                    Startled    Not Startled")
+        print(
+            f"Within Range        {self.confusion_matrix['true_positive']:4d} (TP)    {self.confusion_matrix['false_negative']:4d} (FN)"
+        )
+        print(
+            f"NOT Within Range    {self.confusion_matrix['false_positive']:4d} (FP)    {self.confusion_matrix['true_negative']:4d} (TN)"
+        )
+        print()
+
+        # Calculate metrics
+        tp = self.confusion_matrix["true_positive"]
+        fp = self.confusion_matrix["false_positive"]
+        tn = self.confusion_matrix["true_negative"]
+        fn = self.confusion_matrix["false_negative"]
+
+        total = tp + fp + tn + fn
+        if total > 0:
+            accuracy = (tp + tn) / total
+            print(f"Accuracy: {accuracy:.2%} ({tp + tn}/{total})")
+
+        if tp + fn > 0:
+            sensitivity = tp / (tp + fn)  # True Positive Rate
+            print(
+                f"Sensitivity (TPR): {sensitivity:.2%} - Fish in danger that startled"
+            )
+
+        if tn + fp > 0:
+            specificity = tn / (tn + fp)  # True Negative Rate
+            print(
+                f"Specificity (TNR): {specificity:.2%} - Fish safe that didn't startle"
+            )
+
+        if tp + fp > 0:
+            precision = tp / (tp + fp)
+            print(
+                f"Precision: {precision:.2%} - Startled fish that were actually in danger"
+            )
+
+        print("=" * 60 + "\n")
 
     def remove_predator(self) -> None:
-        """Remove predator from simulation"""
+        """Remove predator from simulation and calculate confusion matrix"""
+        if self.predator_position is not None:
+            # Calculate confusion matrix before removing predator
+            self.calculate_confusion_matrix()
+
         self.predator_position = None
 
 
@@ -926,6 +1084,95 @@ def plot_sir_dynamics(
     ax.set_ylim(0, 1.05)
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best", fontsize=10)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_confusion_matrix(school: FishSchool) -> None:
+    """Plot confusion matrix as a heatmap"""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # Extract values
+    tp = school.confusion_matrix["true_positive"]
+    fp = school.confusion_matrix["false_positive"]
+    tn = school.confusion_matrix["true_negative"]
+    fn = school.confusion_matrix["false_negative"]
+
+    # Create matrix
+    confusion_data = np.array([[tp, fn], [fp, tn]])
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # Create heatmap
+    im = ax.imshow(confusion_data, cmap="Blues", aspect="auto")
+
+    # Set ticks and labels
+    ax.set_xticks([0, 1])
+    ax.set_yticks([0, 1])
+    ax.set_xticklabels(["Startled", "Not Startled"])
+    ax.set_yticklabels(["Within Range", "NOT Within Range"])
+
+    # Add text annotations
+    for i in range(2):
+        for j in range(2):
+            text = ax.text(
+                j,
+                i,
+                f"{confusion_data[i, j]}\n({['TP', 'FN', 'FP', 'TN'][i * 2 + j]})",
+                ha="center",
+                va="center",
+                color=(
+                    "white"
+                    if confusion_data[i, j] > confusion_data.max() / 2
+                    else "black"
+                ),
+                fontsize=14,
+                weight="bold",
+            )
+
+    # Labels and title
+    ax.set_xlabel("Prediction (Cascade Result)", fontsize=12)
+    ax.set_ylabel("Ground Truth (Predator Range)", fontsize=12)
+    ax.set_title(
+        f"Cascade Effectiveness - Confusion Matrix\n(Excluding initially selected fish #{school.selected_fish_id})",
+        fontsize=14,
+    )
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label("Number of Fish", rotation=270, labelpad=20)
+
+    # Calculate and display metrics
+    total = tp + fp + tn + fn
+    metrics_text = ""
+    if total > 0:
+        accuracy = (tp + tn) / total
+        metrics_text += f"Accuracy: {accuracy:.1%}\n"
+    if tp + fn > 0:
+        sensitivity = tp / (tp + fn)
+        metrics_text += f"Sensitivity: {sensitivity:.1%}\n"
+    if tn + fp > 0:
+        specificity = tn / (tn + fp)
+        metrics_text += f"Specificity: {specificity:.1%}\n"
+    if tp + fp > 0:
+        precision = tp / (tp + fp)
+        metrics_text += f"Precision: {precision:.1%}"
+
+    # Add metrics text box
+    if metrics_text:
+        props = dict(boxstyle="round", facecolor="wheat", alpha=0.8)
+        ax.text(
+            1.35,
+            0.5,
+            metrics_text,
+            transform=ax.transAxes,
+            fontsize=11,
+            verticalalignment="center",
+            bbox=props,
+        )
 
     plt.tight_layout()
     plt.show()
@@ -1139,6 +1386,8 @@ def visualize_simulation(
         plot_sir_dynamics(
             school, predator_spawn=predator_time, predator_remove=predator_time + 100
         )
+        # Show confusion matrix plot
+        plot_confusion_matrix(school)
 
     export_sir_data(school, beta, gamma, delta)
 
@@ -1150,9 +1399,9 @@ if __name__ == "__main__":
     tank_dimensions = (100, 200, 100)
 
     # SIRS model parameters
-    beta = 0.6  # Transmission probability (S -> I)
+    beta = 0  # Not used; Transmission probability (S -> I)
     gamma = 20  # Infected duration (1 second at 20 fps)
-    delta = 20  # Recovered duration (frames)
+    delta = 40  # Recovered duration (frames)
     n_fish = 40
 
     print("Starting Fish School Simulator with SIRS Epidemic Model")
@@ -1171,7 +1420,7 @@ if __name__ == "__main__":
     print(f"  - β (transmission probability): {beta}")
     print(f"  - γ (infected duration): {gamma} frames (1 second)")
     print(f"  - δ (recovered duration): {delta} frames (1 second)")
-    print("  - Visual range (fish-to-fish): 15 cm")
+    print("  - Visual range (fish-to-fish): 100 cm")
     print("=" * 60)
     print("\nLegend:")
     print("  Blue dots = Susceptible (S)")
@@ -1186,7 +1435,7 @@ if __name__ == "__main__":
     visualize_simulation(
         n_fish=n_fish,
         n_steps=500,
-        predator_time=100,
+        predator_time=200,
         beta=beta,
         gamma=gamma,
         delta=delta,
