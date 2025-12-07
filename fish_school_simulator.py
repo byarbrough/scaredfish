@@ -155,8 +155,8 @@ class Fish:
         position: npt.ArrayLike,
         velocity: npt.ArrayLike,
         fish_id: int,
-        infected_duration: int = 10,
-        recovered_duration: int = 20,
+        infected_duration: float = 10,
+        recovered_duration: float = 20,
     ) -> None:
         self.position = np.array(position, dtype=float)
         self.velocity = np.array(velocity, dtype=float)
@@ -209,8 +209,8 @@ class FishSchool:
         n_fish: int = 50,
         space_size: float = 100,
         beta: float = 0.6,
-        gamma: int = 20,
-        delta: int = 20,
+        gamma: float = 20,
+        delta: float = 20,
     ) -> None:
         self.n_fish = n_fish
         # Support both single space_size (for backward compatibility) and tuple
@@ -1024,7 +1024,7 @@ class FishSchool:
         self.predator_position = None
 
 
-def export_sir_data(school: FishSchool, beta: float, gamma: int, delta: int) -> str:
+def export_sir_data(school: FishSchool, beta: float, gamma: float, delta: float) -> str:
     """Export SIR dynamics data to CSV file
 
     Returns:
@@ -1187,35 +1187,128 @@ def plot_confusion_matrix(school: FishSchool) -> None:
     plt.show()
 
 
+def run_simulation(
+    n_fish: int = 50,
+    n_steps: int = 1000,
+    predator_spawn_frame: int = 100,
+    predator_remove_frame: Optional[int] = None,
+    gamma: float = 20,
+    delta: float = 20,
+    space_size: Any = 100,
+    beta: float = 0.6,
+    verbose: bool = False,
+) -> FishSchool:
+    """Run simulation in headless mode (no animation) for programmatic access
+
+    Args:
+        n_fish: Number of fish in the school
+        n_steps: Number of simulation steps
+        predator_spawn_frame: Frame when predator spawns
+        predator_remove_frame: Frame when predator is removed (optional, never removed if None)
+        gamma: Infected duration in frames (I->R)
+        delta: Recovered duration in frames (R->S)
+        space_size: Size of simulation space (single value or tuple)
+        beta: Kept for backward compatibility (not used in transmission)
+        verbose: Whether to print debug output
+
+    Returns:
+        FishSchool object with history data
+    """
+    # Suppress print statements if not verbose
+    import sys
+    import io
+
+    old_stdout = sys.stdout
+    if not verbose:
+        sys.stdout = io.StringIO()
+
+    try:
+        school = FishSchool(
+            n_fish=n_fish, space_size=space_size, beta=beta, gamma=gamma, delta=delta
+        )
+
+        for frame in range(n_steps):
+            # Spawn predator at specific time
+            if frame == predator_spawn_frame:
+                school.spawn_predator()
+
+            # Remove predator at specified time (if specified)
+            if predator_remove_frame is not None and frame == predator_remove_frame:
+                school.remove_predator()
+
+            # Update simulation
+            school.update()
+
+        return school
+    finally:
+        # Restore stdout
+        sys.stdout = old_stdout
+
+
 def visualize_simulation(
     n_fish: int = 50,
     n_steps: int = 1000,
     predator_time: int = 100,
+    predator_remove_time: Optional[int] = None,
     beta: float = 0.6,
-    gamma: int = 20,
-    delta: int = 20,
+    gamma: float = 20,
+    delta: float = 20,
     space_size: Any = 100,
     show_plot: bool = True,
-) -> Tuple[FuncAnimation, FishSchool]:
+    show_animation: bool = True,
+) -> Tuple[Optional[FuncAnimation], FishSchool]:
     """Run and visualize the simulation with SIRS dynamics
 
     Args:
         n_fish: Number of fish in the school
         n_steps: Number of simulation steps
         predator_time: Frame when predator spawns
+        predator_remove_time: Frame when predator is removed (default: predator_time + 100)
         beta: Transmission probability (S->I)
         gamma: Infected duration in frames (I->R)
         delta: Recovered duration in frames (R->S)
+        space_size: Size of simulation space (single value or tuple)
         show_plot: Whether to show SIR dynamics plot after simulation
+        show_animation: Whether to show 3D animation (False for headless mode)
 
     Returns:
         Tuple of (animation, school) for further analysis
     """
 
+    # Set default predator removal time
+    if predator_remove_time is None:
+        predator_remove_time = predator_time + 100
+
     # Use space_size as-is (can be single value or tuple)
     school = FishSchool(
         n_fish=n_fish, space_size=space_size, beta=beta, gamma=gamma, delta=delta
     )
+
+    # If headless mode, run simulation without animation
+    if not show_animation:
+        for frame in range(n_steps):
+            # Spawn predator at specific time
+            if frame == predator_time:
+                school.spawn_predator()
+
+            # Remove predator at specified time
+            if frame == predator_remove_time:
+                school.remove_predator()
+
+            # Update simulation
+            school.update()
+
+        # Show plots if requested
+        if show_plot:
+            plot_sir_dynamics(
+                school,
+                predator_spawn=predator_time,
+                predator_remove=predator_remove_time,
+            )
+            plot_confusion_matrix(school)
+
+        export_sir_data(school, beta, gamma, delta)
+        return None, school
 
     # Setup plot
     fig = plt.figure(figsize=(10, 10))
@@ -1258,7 +1351,7 @@ def visualize_simulation(
             school.spawn_predator()
 
         # Remove predator after some time
-        if frame == predator_time + 100:
+        if frame == predator_remove_time:
             school.remove_predator()
             print(f"\n[Frame {frame}] PREDATOR REMOVED")
             print(f"  Total direct infections: {school.total_startles}")
@@ -1393,7 +1486,7 @@ def visualize_simulation(
     # After simulation completes, show SIR dynamics plot and export data
     if show_plot:
         plot_sir_dynamics(
-            school, predator_spawn=predator_time, predator_remove=predator_time + 100
+            school, predator_spawn=predator_time, predator_remove=predator_remove_time
         )
         # Show confusion matrix plot
         plot_confusion_matrix(school)
