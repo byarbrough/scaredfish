@@ -211,6 +211,9 @@ class FishSchool:
         beta: float = 0.6,
         gamma: float = 20,
         delta: float = 20,
+        zone_repulsion: float = 3.0,
+        zone_orientation: float = 12.0,
+        zone_attraction: float = 24.0,
     ) -> None:
         self.n_fish = n_fish
         # Support both single space_size (for backward compatibility) and tuple
@@ -224,10 +227,15 @@ class FishSchool:
 
         # Couzin model parameters
         # Fish body size: 5.5 cm long ≈ 3 cm diameter sphere
-        # Zones rebalanced to maintain proper schooling behavior (4x and 8x ratios)
-        self.zone_repulsion = 3.0  # Distance for repulsion (cm) - prevents overlap
-        self.zone_orientation = 12.0  # Distance for alignment (4× repulsion)
-        self.zone_attraction = 24.0  # Distance for attraction (8× repulsion)
+        # Default zones maintain proper schooling behavior (4x and 8x ratios)
+        # Can be adjusted to model scared (tight) vs relaxed (loose) formations
+        self.zone_repulsion = (
+            zone_repulsion  # Distance for repulsion (cm) - prevents overlap
+        )
+        self.zone_orientation = (
+            zone_orientation  # Distance for alignment (4× repulsion)
+        )
+        self.zone_attraction = zone_attraction  # Distance for attraction (8× repulsion)
 
         # Speed parameters (in cm/frame at 20 fps)
         # min_speed: 0.5 cm/frame = 10 cm/s at 20 fps
@@ -1197,6 +1205,9 @@ def run_simulation(
     space_size: Any = 100,
     beta: float = 0.6,
     verbose: bool = False,
+    zone_repulsion: float = 3.0,
+    zone_orientation: float = 12.0,
+    zone_attraction: float = 24.0,
 ) -> FishSchool:
     """Run simulation in headless mode (no animation) for programmatic access
 
@@ -1210,6 +1221,9 @@ def run_simulation(
         space_size: Size of simulation space (single value or tuple)
         beta: Kept for backward compatibility (not used in transmission)
         verbose: Whether to print debug output
+        zone_repulsion: Couzin model repulsion zone radius (cm)
+        zone_orientation: Couzin model orientation zone radius (cm)
+        zone_attraction: Couzin model attraction zone radius (cm)
 
     Returns:
         FishSchool object with history data
@@ -1224,7 +1238,14 @@ def run_simulation(
 
     try:
         school = FishSchool(
-            n_fish=n_fish, space_size=space_size, beta=beta, gamma=gamma, delta=delta
+            n_fish=n_fish,
+            space_size=space_size,
+            beta=beta,
+            gamma=gamma,
+            delta=delta,
+            zone_repulsion=zone_repulsion,
+            zone_orientation=zone_orientation,
+            zone_attraction=zone_attraction,
         )
 
         for frame in range(n_steps):
@@ -1256,6 +1277,9 @@ def visualize_simulation(
     space_size: Any = 100,
     show_plot: bool = True,
     show_animation: bool = True,
+    zone_repulsion: float = 3.0,
+    zone_orientation: float = 12.0,
+    zone_attraction: float = 24.0,
 ) -> Tuple[Optional[FuncAnimation], FishSchool]:
     """Run and visualize the simulation with SIRS dynamics
 
@@ -1270,6 +1294,9 @@ def visualize_simulation(
         space_size: Size of simulation space (single value or tuple)
         show_plot: Whether to show SIR dynamics plot after simulation
         show_animation: Whether to show 3D animation (False for headless mode)
+        zone_repulsion: Couzin model repulsion zone radius (cm)
+        zone_orientation: Couzin model orientation zone radius (cm)
+        zone_attraction: Couzin model attraction zone radius (cm)
 
     Returns:
         Tuple of (animation, school) for further analysis
@@ -1281,7 +1308,14 @@ def visualize_simulation(
 
     # Use space_size as-is (can be single value or tuple)
     school = FishSchool(
-        n_fish=n_fish, space_size=space_size, beta=beta, gamma=gamma, delta=delta
+        n_fish=n_fish,
+        space_size=space_size,
+        beta=beta,
+        gamma=gamma,
+        delta=delta,
+        zone_repulsion=zone_repulsion,
+        zone_orientation=zone_orientation,
+        zone_attraction=zone_attraction,
     )
 
     # If headless mode, run simulation without animation
