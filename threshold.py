@@ -17,7 +17,7 @@ from fish_school_simulator import run_simulation
 TANK_DIMENSIONS: Tuple[int, int, int] = (100, 200, 100)
 
 # Experiment parameters
-DELTA_VALUES: list[float] = [float(x) for x in np.arange(0.5, 10.5, 0.05)]
+DELTA_VALUES: list[float] = [float(x) for x in np.arange(0.0, 10.5, 0.5)]
 N_ITERATIONS: int = 500  # Number of trials per delta value
 N_FISH: int = 40
 GAMMA: float = 10  # Infected duration (frames)
