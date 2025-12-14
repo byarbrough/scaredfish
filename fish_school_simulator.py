@@ -1537,7 +1537,7 @@ if __name__ == "__main__":
     # SIRS model parameters at 20 fps
     beta = 0  # Not used
     gamma = 10  # Infected duration (frames)
-    delta = 1  # Recovered duration (frames)
+    delta = 60  # Recovered duration (frames)
     n_fish = 40
 
     print("Starting Fish School Simulator with SIRS Epidemic Model")
