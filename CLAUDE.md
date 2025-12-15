@@ -30,7 +30,7 @@ source .venv/bin/activate
 python fish_school_simulator.py
 ```
 
-The simulation will open a 3D matplotlib visualization showing fish behavior over time. A predator spawns at t=100 frames (at the school's center) and is removed at t=200. After the simulation completes, a SIRS dynamics plot is displayed and data is exported to a CSV file named `{beta}_{gamma}_{delta}.csv`.
+The simulation will open a 3D matplotlib visualization showing fish behavior over time. A predator spawns at t=200 frames (at the school's center) and is removed at t=400. After the simulation completes, a SIRS dynamics plot is displayed and data is exported to a CSV file named `{beta}_{gamma}_{delta}.csv`.
 
 ### Working with Empirical Data
 The repository includes Jupyter notebooks for analyzing the empirical data that informed the model:
@@ -49,7 +49,10 @@ The current empirical coefficients (β₁=0.103641, β₂=-3.297823, β₃=-0.07
 - Individual fish agent with position, velocity, and SIRS state
 - States: 'susceptible' (S), 'infected' (I), 'recovered' (R)
 - Tracks state duration with timers (infected_duration, recovered_duration)
-- Implements infection response: doubles velocity for escape behavior
+- Implements infection response: increases velocity to 1.75 cm/frame (35 cm/s at 20 fps) for escape behavior
+  - Susceptible: 0.5 cm/frame (10 cm/s)
+  - Infected: 1.75 cm/frame (35 cm/s)
+  - Recovered: 0.25 cm/frame (5 cm/s)
 - State transitions: S → I (via predator detection or social transmission) → R (after infected_duration) → S (after recovered_duration)
 
 **FishSchool Class** (`fish_school_simulator.py:62-350`)
@@ -69,16 +72,19 @@ The current empirical coefficients (β₁=0.103641, β₂=-3.297823, β₃=-0.07
 ### Key Parameters
 
 **Couzin Model Parameters** (in `FishSchool.__init__`):
-- `zone_repulsion`, `zone_orientation`, `zone_attraction`: Interaction zone distances (2.0, 10.0, 20.0 units)
-- `max_speed`, `min_speed`: Movement constraints (2.0, 0.5 units/frame)
+- `zone_repulsion`, `zone_orientation`, `zone_attraction`: Interaction zone distances (default: 4.5, 12.0, 48.0 cm)
+  - Can be adjusted to model scared (tight) vs relaxed (loose) formations
+- `max_speed`, `min_speed`: Movement constraints (1.0, 0.5 cm/frame at 20 fps)
 - `max_turn_rate`: Turning angle limit per timestep (0.3 radians)
 
 **SIRS Epidemic Parameters** (in `FishSchool.__init__`):
-- `beta`: Kept for backward compatibility in plots/exports (default: 0.6) - NOT used for transmission probability
-- `gamma` (γ): Infected duration in frames before transition to recovered state (default: 10)
-- `delta` (δ): Recovered duration in frames before returning to susceptible state (default: 20)
-- `predator_detection_radius`: How far fish detect predators (25.0 units)
-- `visual_range`: Distance fish can see each other for social transmission (15.0 units)
+- `beta`: Kept for backward compatibility in plots/exports (default: 0) - **NOT used** for transmission probability
+  - Transmission probability is calculated using the empirical equation: P = 1/(1 + e^(-β₁ - β₂·LMD - β₃·RAA))
+- `gamma` (γ): Infected duration in frames before transition to recovered state (default: 10 frames = 0.5 seconds at 20 fps)
+- `delta` (δ): Recovered duration in frames before returning to susceptible state (default: 60 frames = 3 seconds at 20 fps)
+- `predator_detection_radius`: How far fish detect predators (50.0 cm)
+- `visual_range`: Distance fish can see each other for social transmission (120.0 cm - extended to capture long-range cascades)
+- `verbose`: Control debug output (default: False) - set to True to see detailed cascade information
 
 **Empirical Startle Transmission Parameters** (in `FishSchool.__init__`):
 - `beta_1`: Logistic regression intercept (0.103641)
@@ -169,3 +175,71 @@ The `_calculate_raa` method computes how visually prominent a startled fish appe
 - Only susceptible fish can be infected (via `infect()` method)
 - Infected fish automatically escape (velocity manipulation in movement logic)
 - State history tracked in `FishSchool.history` dict with normalized proportions
+
+## Performance Optimizations
+
+The simulation implements several performance optimizations to handle real-time visualization and large-scale experiments:
+
+**Spatial Indexing with KDTree** (`get_neighbors_fast` method):
+- Uses `scipy.spatial.KDTree` for efficient neighbor queries
+- O(log n) lookup time instead of O(n²) brute force
+- Critical for cascade checks and RAA calculations with many fish
+- Dual implementation: `get_neighbors()` for Fish objects (backward compatibility), `get_neighbors_fast()` for index-based operations
+
+**Numba JIT Compilation**:
+- `@jit(nopython=True)` decorator on performance-critical functions
+- `compute_startle_probabilities()`: Vectorized probability calculations
+- Compiles to machine code for near-C performance
+- Significant speedup for probability computation over many fish pairs
+
+**Vectorized RAA Calculations** (`_calculate_raa_batch` method):
+- Batch processing of RAA for all susceptible neighbors simultaneously
+- NumPy array operations instead of Python loops
+- Reduces overhead when checking cascades from multiple infected fish
+- Dual implementation: `_calculate_raa()` for single calculations, `_calculate_raa_batch()` for batch operations
+
+**Performance Impact**:
+- Enables real-time 3D visualization with 40+ fish at 20 fps
+- Threshold experiments can run 250 trials × 21 parameter values in reasonable time
+- Essential for exploring parameter space and running statistical analyses
+
+## Threshold Experiments
+
+The `threshold.py` script runs systematic experiments to find endemic equilibrium points for the delta parameter.
+
+**Purpose**: Identify threshold values where infection persists in the population (endemic) vs dies out (epidemic extinction).
+
+**Experimental Design**:
+- Tests 21 delta values from 0 to 10 frames (0 to 0.5 seconds at 20 fps)
+- 250 independent trials per delta value for statistical power
+- Parallel execution using multiprocessing (utilizes all CPU cores)
+- Two behavioral state presets:
+
+**Behavioral States**:
+1. **Relaxed** (loose schooling):
+   - zone_repulsion: 5.0 cm
+   - zone_orientation: 12.0 cm
+   - zone_attraction: 36.0 cm
+   - Models unstressed fish with normal nearest-neighbor distances
+
+2. **Alarmed** (tight schooling):
+   - zone_repulsion: 2.75 cm
+   - zone_orientation: 12.0 cm
+   - zone_attraction: 48.0 cm
+   - Models stressed fish with closer grouping behavior
+
+**Output Files**:
+- `threshold_detailed_results.csv`: All 5,250 trial results (250 trials × 21 deltas)
+  - Columns: delta, trial, S_count, I_count, R_count, S_prop, I_prop, R_prop, mean_NND
+- `threshold_summary.csv`: Aggregated statistics per delta value
+  - Columns: delta, mean_S, std_S, mean_I, std_I, mean_R, std_R, mean_NND, std_NND
+
+**Analysis Workflow**:
+1. Run experiments: `python threshold.py --state relaxed` or `python threshold.py --state alarmed`
+2. Analyze results: Open `threshold_analysis.ipynb` to visualize endemic equilibrium thresholds
+3. Compare NND (nearest-neighbor distance) predictions against empirical data from `realdata/`
+
+**Key Findings**:
+- Lower delta (shorter recovered duration) → higher endemic prevalence
+- Behavioral state affects transmission: alarmed fish (closer spacing) show different epidemic dynamics
+- Endemic equilibrium occurs when delta < ~5-7 frames depending on behavioral state

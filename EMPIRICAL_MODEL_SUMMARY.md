@@ -11,7 +11,7 @@ P(s_i | s_j) = 1 / (1 + exp(-β₁ - β₂·LMD - β₃·RAA))
 ```
 
 Where:
-- **LMD** (Log Metric Distance): `log(distance)` between the two fish
+- **LMD** (Log Metric Distance): `log₁₀(distance)` between the two fish (base-10 logarithm, not natural log)
 - **RAA** (Ranked Angular Area): Normalized rank of fish `j`'s apparent size on fish `i`'s retina
 
 ### Empirical Parameters (from research)
@@ -69,7 +69,9 @@ Instead of full ray-tracing, use a practical heuristic:
 
 ## Validation
 
-Test results (`test_empirical_model.py`) show expected behavior:
+Comprehensive unit tests in **[test_empirical_model.py](test_empirical_model.py)** verify the empirical model implementation.
+
+Test results show expected behavior:
 - ✓ Closer fish have higher transmission probability
 - ✓ Probability decreases exponentially with distance
 - ✓ Fish in blind spot (behind) have 0% transmission probability

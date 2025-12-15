@@ -14,7 +14,7 @@ import numpy.typing as npt
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import csv
-from numba import jit, prange
+from numba import jit
 from scipy.spatial import KDTree
 
 # Default Couzin model zone parameters (cm)
@@ -222,6 +222,7 @@ class FishSchool:
         zone_repulsion: float = DEFAULT_ZONE_REPULSION,
         zone_orientation: float = DEFAULT_ZONE_ORIENTATION,
         zone_attraction: float = DEFAULT_ZONE_ATTRACTION,
+        verbose: bool = False,
     ) -> None:
         self.n_fish = n_fish
         # Support both single space_size (for backward compatibility) and tuple
@@ -265,6 +266,7 @@ class FishSchool:
         # Debug tracking
         self.total_startles = 0
         self.cascade_startles = 0
+        self.verbose = verbose  # Control debug output
 
         # Confusion matrix tracking for cascade effectiveness
         self.selected_fish_id: Optional[int] = None  # ID of fish that spawns predator
@@ -764,7 +766,7 @@ class FishSchool:
             )
 
             # Debug: print detailed info for visible fish
-            if nonzero_raas > 0:
+            if self.verbose and nonzero_raas > 0:
                 for i in range(len(raas)):
                     if raas[i] > 0:
                         print(
@@ -787,7 +789,7 @@ class FishSchool:
                 self.fish_that_startled.add(self.fish[susc_idx].id)
 
         # Debug output every frame with infected fish
-        if total_susceptible_checked > 0:
+        if self.verbose and total_susceptible_checked > 0:
             print(
                 f"[Frame {self.time_step}] CASCADE CHECK: {len(infected_indices)} infected, "
                 f"{total_neighbors_in_range} susceptible in range, "
@@ -795,7 +797,7 @@ class FishSchool:
                 f"{newly_infected_count} newly infected"
             )
 
-        if newly_infected_count > 0:
+        if self.verbose and newly_infected_count > 0:
             print(
                 f"[Frame {self.time_step}] CASCADE SUCCESS: {newly_infected_count} fish infected by seeing others!"
             )
@@ -1136,9 +1138,6 @@ def plot_sir_dynamics(
 
 def plot_confusion_matrix(school: FishSchool) -> None:
     """Plot confusion matrix as a heatmap"""
-    import matplotlib.pyplot as plt
-    import numpy as np
-
     # Extract values
     tp = school.confusion_matrix["true_positive"]
     fp = school.confusion_matrix["false_positive"]
@@ -1507,21 +1506,9 @@ def visualize_simulation(
 
         # Update text
         time_text.set_text(f"Time: {frame}")
-        n_s = (
-            len(susceptible_positions)
-            if isinstance(susceptible_positions, list)
-            else len(susceptible_positions)
-        )
-        n_i = (
-            len(infected_positions)
-            if isinstance(infected_positions, list)
-            else len(infected_positions)
-        )
-        n_r = (
-            len(recovered_positions)
-            if isinstance(recovered_positions, list)
-            else len(recovered_positions)
-        )
+        n_s = len(susceptible_positions)
+        n_i = len(infected_positions)
+        n_r = len(recovered_positions)
         state_text.set_text(f"S:{n_s} I:{n_i} R:{n_r}")
 
         return (
@@ -1575,16 +1562,23 @@ if __name__ == "__main__":
     print(
         f"  - Tank dimensions: {tank_dimensions[0]}cm x {tank_dimensions[1]}cm x {tank_dimensions[2]}cm (1m x 2m x 1m)"
     )
-    print("  - Unstartled fish speed: 10 cm/s (0.5 cm/frame at 20 fps)")
-    print("  - Startled fish speed: 20 cm/s (1.0 cm/frame at 20 fps)")
-    print("  - Predator appears at t=100 (spawns at school center)")
-    print("  - Predator removed at t=200")
-    print("  - Predator detection radius: 25 cm")
+    print("  - Susceptible fish speed: 10 cm/s (0.5 cm/frame at 20 fps)")
+    print("  - Infected fish speed: 35 cm/s (1.75 cm/frame at 20 fps)")
+    print("  - Recovered fish speed: 5 cm/s (0.25 cm/frame at 20 fps)")
+    print(f"  - Predator appears at t={200} (spawns at school center)")
+    print(f"  - Predator removed at t={400}")
+    print("  - Predator detection radius: 50 cm")
     print("\nSIRS Model Parameters:")
-    print(f"  - β (transmission probability): {beta}")
-    print(f"  - γ (infected duration): {gamma} frames (1 second)")
-    print(f"  - δ (recovered duration): {delta} frames (1 second)")
-    print("  - Visual range (fish-to-fish): 100 cm")
+    print(
+        f"  - β (transmission probability): {beta} (not used - empirical model instead)"
+    )
+    print(
+        f"  - γ (infected duration): {gamma} frames ({gamma/20:.2f} seconds at 20 fps)"
+    )
+    print(
+        f"  - δ (recovered duration): {delta} frames ({delta/20:.2f} seconds at 20 fps)"
+    )
+    print("  - Visual range (fish-to-fish): 120 cm")
     print("=" * 60)
     print("\nLegend:")
     print("  Blue dots = Susceptible (S)")

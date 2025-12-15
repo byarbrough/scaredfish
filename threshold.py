@@ -26,7 +26,9 @@ N_FISH: int = 40
 GAMMA: float = 10  # Infected duration (frames)
 PREDATOR_SPAWN_FRAME: int = 400
 N_STEPS: int = 800  # Run until frame 800
-BETA: float = 0  # Kept for backward compatibility
+BETA: float = (
+    0  # Not used - transmission probability calculated via empirical equation P = 1/(1 + e^(-β₁ - β₂·LMD - β₃·RAA))
+)
 
 # Couzin zone parameter presets
 ZONE_PARAMS = {
