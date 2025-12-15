@@ -21,7 +21,7 @@ from scipy.spatial import KDTree
 # Fish body size: 5.5 cm long ≈ 3 cm diameter sphere
 # Default zones maintain proper schooling behavior (4x and 8x ratios)
 # Can be adjusted to model scared (tight) vs relaxed (loose) formations
-DEFAULT_ZONE_REPULSION = 3.0  # Distance for repulsion - prevents overlap
+DEFAULT_ZONE_REPULSION = 6.0  # Distance for repulsion - prevents overlap
 DEFAULT_ZONE_ORIENTATION = 12.0  # Distance for alignment (4× repulsion)
 DEFAULT_ZONE_ATTRACTION = 24.0  # Distance for attraction (8× repulsion)
 
