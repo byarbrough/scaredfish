@@ -1,5 +1,5 @@
 #!/bin/bash
-
+echo test
 # Run threshold experiments for both relaxed and alarmed states
 # This script runs the threshold.py experiment twice with different Couzin parameters
 
@@ -12,8 +12,6 @@ echo ""
 echo "This will run two experiments:"
 echo "  1. Relaxed state (repulsion=5, orientation=12, attraction=36)"
 echo "  2. Alarmed state (repulsion=2.75, orientation=12, attraction=48)"
-echo ""
-echo "Each experiment runs 100 iterations for each delta value."
 echo ""
 echo "========================================================================"
 echo ""
