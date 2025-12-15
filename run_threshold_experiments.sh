@@ -1,5 +1,4 @@
 #!/bin/bash
-echo test
 # Run threshold experiments for both relaxed and alarmed states
 # This script runs the threshold.py experiment twice with different Couzin parameters
 
