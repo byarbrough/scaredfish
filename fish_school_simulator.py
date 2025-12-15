@@ -17,6 +17,14 @@ import csv
 from numba import jit, prange
 from scipy.spatial import KDTree
 
+# Default Couzin model zone parameters (cm)
+# Fish body size: 5.5 cm long ≈ 3 cm diameter sphere
+# Default zones maintain proper schooling behavior (4x and 8x ratios)
+# Can be adjusted to model scared (tight) vs relaxed (loose) formations
+DEFAULT_ZONE_REPULSION = 4.5  # Distance for repulsion - prevents overlap
+DEFAULT_ZONE_ORIENTATION = 12.0  # Distance for alignment (4× repulsion)
+DEFAULT_ZONE_ATTRACTION = 24.0  # Distance for attraction (8× repulsion)
+
 
 # JIT-compiled helper functions for performance
 @jit(nopython=True, cache=True)
@@ -211,9 +219,9 @@ class FishSchool:
         beta: float = 0.6,
         gamma: float = 20,
         delta: float = 20,
-        zone_repulsion: float = 3.0,
-        zone_orientation: float = 12.0,
-        zone_attraction: float = 24.0,
+        zone_repulsion: float = DEFAULT_ZONE_REPULSION,
+        zone_orientation: float = DEFAULT_ZONE_ORIENTATION,
+        zone_attraction: float = DEFAULT_ZONE_ATTRACTION,
     ) -> None:
         self.n_fish = n_fish
         # Support both single space_size (for backward compatibility) and tuple
@@ -226,16 +234,9 @@ class FishSchool:
         self.space_size = space_size  # Keep for backward compatibility
 
         # Couzin model parameters
-        # Fish body size: 5.5 cm long ≈ 3 cm diameter sphere
-        # Default zones maintain proper schooling behavior (4x and 8x ratios)
-        # Can be adjusted to model scared (tight) vs relaxed (loose) formations
-        self.zone_repulsion = (
-            zone_repulsion  # Distance for repulsion (cm) - prevents overlap
-        )
-        self.zone_orientation = (
-            zone_orientation  # Distance for alignment (4× repulsion)
-        )
-        self.zone_attraction = zone_attraction  # Distance for attraction (8× repulsion)
+        self.zone_repulsion = zone_repulsion
+        self.zone_orientation = zone_orientation
+        self.zone_attraction = zone_attraction
 
         # Speed parameters (in cm/frame at 20 fps)
         # min_speed: 0.5 cm/frame = 10 cm/s at 20 fps
@@ -877,6 +878,33 @@ class FishSchool:
         positions = np.array([fish.position for fish in self.fish])
         return np.mean(positions, axis=0)
 
+    def get_average_nearest_neighbor_distance(self) -> float:
+        """Calculate average nearest neighbor distance across all fish
+
+        Returns:
+            Average of the nearest neighbor distance for each fish (in cm)
+        """
+        if self._cached_positions is None:
+            self._rebuild_spatial_index()
+
+        assert self._cached_positions is not None
+
+        # Compute pairwise distances using vectorized operation
+        pairwise_distances = compute_pairwise_distances(self._cached_positions)
+
+        # For each fish, find its nearest neighbor (excluding itself)
+        nearest_neighbor_distances = []
+        for i in range(len(self.fish)):
+            # Set self-distance to infinity to exclude it
+            distances_from_i = pairwise_distances[i].copy()
+            distances_from_i[i] = np.inf
+
+            # Find minimum distance
+            min_dist = np.min(distances_from_i)
+            nearest_neighbor_distances.append(min_dist)
+
+        return float(np.mean(nearest_neighbor_distances))
+
     def spawn_predator(
         self, selected_fish: Optional[Fish] = None, offset_distance: float = 5.0
     ) -> None:
@@ -1205,9 +1233,9 @@ def run_simulation(
     space_size: Any = 100,
     beta: float = 0.6,
     verbose: bool = False,
-    zone_repulsion: float = 3.0,
-    zone_orientation: float = 12.0,
-    zone_attraction: float = 24.0,
+    zone_repulsion: float = DEFAULT_ZONE_REPULSION,
+    zone_orientation: float = DEFAULT_ZONE_ORIENTATION,
+    zone_attraction: float = DEFAULT_ZONE_ATTRACTION,
 ) -> FishSchool:
     """Run simulation in headless mode (no animation) for programmatic access
 
@@ -1277,9 +1305,9 @@ def visualize_simulation(
     space_size: Any = 100,
     show_plot: bool = True,
     show_animation: bool = True,
-    zone_repulsion: float = 3.0,
-    zone_orientation: float = 12.0,
-    zone_attraction: float = 24.0,
+    zone_repulsion: float = DEFAULT_ZONE_REPULSION,
+    zone_orientation: float = DEFAULT_ZONE_ORIENTATION,
+    zone_attraction: float = DEFAULT_ZONE_ATTRACTION,
 ) -> Tuple[Optional[FuncAnimation], FishSchool]:
     """Run and visualize the simulation with SIRS dynamics
 

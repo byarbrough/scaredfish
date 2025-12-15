@@ -1,7 +1,7 @@
-*.csv
 *.h5
 __pycache__
 references/*
 *.png
 
 .DS_Store
+.venv/
