@@ -21,7 +21,7 @@ from scipy.spatial import KDTree
 # Fish body size: 5.5 cm long ≈ 3 cm diameter sphere
 # Default zones maintain proper schooling behavior (4x and 8x ratios)
 # Can be adjusted to model scared (tight) vs relaxed (loose) formations
-DEFAULT_ZONE_REPULSION = 6.0  # Distance for repulsion - prevents overlap
+DEFAULT_ZONE_REPULSION = 4.5  # Distance for repulsion - prevents overlap
 DEFAULT_ZONE_ORIENTATION = 12.0  # Distance for alignment (4× repulsion)
 DEFAULT_ZONE_ATTRACTION = 24.0  # Distance for attraction (8× repulsion)
 
@@ -877,6 +877,33 @@ class FishSchool:
         """Calculate center of mass of the fish school"""
         positions = np.array([fish.position for fish in self.fish])
         return np.mean(positions, axis=0)
+
+    def get_average_nearest_neighbor_distance(self) -> float:
+        """Calculate average nearest neighbor distance across all fish
+
+        Returns:
+            Average of the nearest neighbor distance for each fish (in cm)
+        """
+        if self._cached_positions is None:
+            self._rebuild_spatial_index()
+
+        assert self._cached_positions is not None
+
+        # Compute pairwise distances using vectorized operation
+        pairwise_distances = compute_pairwise_distances(self._cached_positions)
+
+        # For each fish, find its nearest neighbor (excluding itself)
+        nearest_neighbor_distances = []
+        for i in range(len(self.fish)):
+            # Set self-distance to infinity to exclude it
+            distances_from_i = pairwise_distances[i].copy()
+            distances_from_i[i] = np.inf
+
+            # Find minimum distance
+            min_dist = np.min(distances_from_i)
+            nearest_neighbor_distances.append(min_dist)
+
+        return float(np.mean(nearest_neighbor_distances))
 
     def spawn_predator(
         self, selected_fish: Optional[Fish] = None, offset_distance: float = 5.0
