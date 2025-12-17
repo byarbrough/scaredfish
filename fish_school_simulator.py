@@ -1125,7 +1125,7 @@ def plot_sir_dynamics(
     ax.set_xlabel("Time (frames)", fontsize=12)
     ax.set_ylabel("Proportion of Fish", fontsize=12)
     ax.set_title(
-        f"SIRS Dynamics (β={school.beta}, γ={school.gamma}, δ={school.delta})",
+        f"SIRS Dynamics (γ={school.gamma}, δ={school.delta})",
         fontsize=14,
     )
     ax.set_ylim(0, 1.05)
@@ -1552,7 +1552,7 @@ if __name__ == "__main__":
     # SIRS model parameters at 20 fps
     beta = 0  # Not used
     gamma = 10  # Infected duration (frames)
-    delta = 60  # Recovered duration (frames)
+    delta = 40  # Recovered duration (frames)
     n_fish = 40
 
     print("Starting Fish School Simulator with SIRS Epidemic Model")
@@ -1592,8 +1592,8 @@ if __name__ == "__main__":
 
     visualize_simulation(
         n_fish=n_fish,
-        n_steps=500,
-        predator_time=200,
+        n_steps=600,
+        predator_time=400,
         beta=beta,
         gamma=gamma,
         delta=delta,

@@ -1,0 +1,3 @@
+state,avg_max_I_proportion,std_max_I_proportion,avg_max_I_count,std_max_I_count,avg_frames_to_extinction,std_frames_to_extinction,median_frames_to_extinction,trials_without_extinction
+relaxed,0.5689000000000001,0.19990050130212703,22.756,7.99602005208508,29.408,9.287305534339675,29.0,0
+alarmed,0.8095999999999999,0.20194529904807199,32.384,8.07781196192288,19.16,4.226360638717074,18.0,0
