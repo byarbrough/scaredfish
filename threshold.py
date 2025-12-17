@@ -20,12 +20,15 @@ from fish_school_simulator import FishSchool
 TANK_DIMENSIONS: Tuple[int, int, int] = (100, 200, 100)
 
 # Experiment parameters
-DELTA_VALUES: list[float] = [float(x) for x in np.arange(0.0, 10.5, 0.5)]
-N_ITERATIONS: int = 250  # Number of trials per delta value
+DELTA_VALUES: list[float] = [
+    40.0,
+    40.0,
+]  # [float(x) for x in np.arange(0.0, 10.5, 0.5)]
+N_ITERATIONS: int = 5  # Number of trials per delta value
 N_FISH: int = 40
 GAMMA: float = 10  # Infected duration (frames)
 PREDATOR_SPAWN_FRAME: int = 400
-N_STEPS: int = 800  # Run until frame 800
+N_STEPS: int = 400  # 800  # Run until frame 800
 BETA: float = (
     0  # Not used - transmission probability calculated via empirical equation P = 1/(1 + e^(-β₁ - β₂·LMD - β₃·RAA))
 )
